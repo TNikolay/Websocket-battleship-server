@@ -1,9 +1,11 @@
 import { WebSocket, WebSocketServer } from 'ws'
-import { IRoom, IUser, IUserNameAndId, WebSocketEx } from './types'
+import { IDBUser, IRoom, IUser, IUserNameAndId, WebSocketEx, dbType } from './types'
 
 const PORT = 3000
 
-const lUsers: IUser[] = []
+const db: dbType = new Map()
+
+//const lUsers: IUser[] = []
 
 type lRoomsType = Map<number, IRoom>
 const lRooms: lRoomsType = new Map()
@@ -11,16 +13,15 @@ const lRooms: lRoomsType = new Map()
 const lWinners = []
 //const lConnection: WebSocket[] = []
 
-let nextRoomId = 0 // don't forget to fix problem with overflow after reaching first millions of player!
+let nextRoomId = 1 // don't forget to fix problem with overflow after reaching first millions of player!
 
 // -----------------------------------------------------
 
 const wss = new WebSocketServer({ port: PORT }, () => console.log(`Start WSServer on the ${PORT} port!`))
 
 wss.on('connection', (ws: WebSocketEx) => {
-  let user: IUserNameAndId
+  ws.userName = ''
 
-  //lConnection.push(ws)
   console.log(`new client connected, (${wss.clients.size} at server)`)
 
   ws.on('message', (mes: string) => handleMessage(ws, mes))
@@ -28,12 +29,19 @@ wss.on('connection', (ws: WebSocketEx) => {
   ws.on('error', console.error)
 
   ws.on('close', () => {
-    console.log('Client disconnected')
-    // const index = lConnection.indexOf(ws)
-    // if (index !== -1) lConnection.splice(index, 1)
-    // else console.error('onClose error: strange ws?')
+    console.log(ws.userName ? `${ws.userName} disconnected` : 'client disconnected')
 
-    // if (userId !== -1) lUsers[userId] = undefined
+    if (ws.userName) {
+      const user = db.get(ws.userName)
+      if (user) {
+        user.ws = undefined
+        if (user.room) {
+          lRooms.delete(user.room)
+          user.room = undefined
+          sendUpdateRoom(wss, lRooms)
+        }
+      }
+    }
   })
 })
 
@@ -62,58 +70,87 @@ const handleMessage = (ws: WebSocketEx, mes: string) => {
 }
 
 function handleCreateRoom(ws: WebSocketEx) {
+  const user = db.get(ws.userName)
+  if (!user) return console.log('Oops! where is our user?')
+  if (user.room) return // only 1 room for user, the server is not rubber!
+
   const room: IRoom = {
     roomId: nextRoomId,
-    roomUsers: [ws.user!],
+    roomUsers: [{ name: ws.userName, index: user.id }],
   }
   lRooms.set(nextRoomId++, room)
+  user.room = room.roomId
   sendUpdateRoom(wss, lRooms)
 }
 
 function handleAddUserToRoom(ws: WebSocketEx, index: number) {
-  console.log(index, lRooms)
+  const user = db.get(ws.userName)
+  if (!user) return console.log('Oops! where is our user? ', ws.userName)
+  if (user.room) return // only 1 room for user, the server is not rubber!
 
   const room = lRooms.get(index)
   if (!room) return console.error('error: room is undefined!')
-  if (room.roomUsers.length === 1 && room.roomUsers[0].name === ws.user?.name) return // fix front bug
   if (room.roomUsers.length > 1) return console.error('error: room is full!')
-  room.roomUsers.push(ws.user!)
+
+  room.roomUsers.push({ name: ws.userName, index: user.id })
+  lRooms.delete(room.roomId)
   sendUpdateRoom(wss, lRooms)
 
-  // temp
-  wss.clients.forEach((client: WebSocketEx) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(composeResponse('create_game', { idGame: 1, idPlayer: 1 }))
-    } else console.log('Oops!: trying to send createGame to NOT OPEN socket ', client.readyState)
+  const idPlayer = user.id
+  room.roomUsers.forEach(user => {
+    const realUser = db.get(user.name)
+    if (!realUser) return console.log('Oops! where is our user? ', user.name)
+    realUser.room = undefined
+
+    const ws = realUser.ws
+    if (!ws) return console.log('Oops! where is our user.ws?')
+    if (ws.readyState === WebSocket.OPEN) ws.send(composeResponse('create_game', { idGame: 1, idPlayer }))
+    else console.log('Oops!: trying to send createGame to NOT OPEN socket ', ws.readyState)
   })
 }
 
 function handleLogin(ws: WebSocketEx, name: string, password: string) {
-  // console.log(name, lUsers)
-  // if (lUsers.find(v => v.name === name)) {
-  //   const data = {
-  //     name: name,
-  //     index: -1,
-  //     error: true,
-  //     errorText: 'User with such name already logged!',
-  //   }
-  //   ws.send(composeResponse('reg', data))
-  //   return
-  // }
+  let user = db.get(name)
+  if (user) {
+    if (user.password !== password) {
+      const res = {
+        name: name,
+        index: user.id,
+        error: true,
+        errorText: `Invalid password for user ${name}`,
+      }
+      ws.send(composeResponse('reg', res))
+      return
+    } else if (user.ws) {
+      // TODO - check if connection is alive or maybe kill it?
+      const res = {
+        name: name,
+        index: user.id,
+        error: true,
+        errorText: `User with name ${name} already logged!`,
+      }
+      ws.send(composeResponse('reg', res))
+      return
+    }
+  } else {
+    // create a new user in db
+    user = { id: db.size + 1, password }
+    db.set(name, user)
+  }
 
-  ws.user = { name, index: lUsers.length }
-  const data = {
+  user.ws = ws
+  ws.userName = name
+
+  const res = {
     name: name,
-    index: ws.user.index,
+    index: user.id,
     error: false,
     errorText: '',
   }
 
-  lUsers.push({ name, password })
-
-  ws.send(composeResponse('reg', data))
+  ws.send(composeResponse('reg', res))
   sendUpdateRoom(ws, lRooms)
-  // ws.send(composeResponse('update_winners', lWinners))
+  ws.send(composeResponse('update_winners', lWinners))
 }
 
 function composeResponse(type: string, data: Object) {
@@ -127,21 +164,16 @@ function composeResponse(type: string, data: Object) {
 }
 
 function sendUpdateRoom(dest: WebSocketEx | WebSocketServer, data: lRoomsType) {
-  const rooms: any[] = [] //data.filter(room => room[1].roomUsers.length === 1)
+  const rooms: IRoom[] = []
   for (let room of data.values()) {
     if (room.roomUsers.length === 1) rooms.push(room)
-    // if (room.roomUsers.length === 1) {
-    //   rooms.push({ roomId: room.roomId, roomUsers: JSON.stringify(room.roomUsers) })
-    // }
   }
 
+  const res = composeResponse('update_room', rooms)
   if (dest instanceof WebSocketServer) {
-    wss.clients.forEach((client: WebSocketEx) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(composeResponse('update_room', rooms))
-      } else console.log('Oops!: trying to send updateRoom to NOT OPEN socket ', client.readyState)
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) client.send(res)
+      else console.log('Oops!: trying to send updateRoom to NOT OPEN socket ', client.readyState)
     })
-  } else {
-    dest.send(composeResponse('update_room', rooms))
-  }
+  } else dest.send(res)
 }

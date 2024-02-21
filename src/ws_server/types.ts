@@ -1,16 +1,20 @@
 import { WebSocket } from 'ws'
 export interface WebSocketEx extends WebSocket {
-  user?: IUserNameAndId
+  userName: string
 }
+
+export interface IDBUser {
+  id: number
+  password: string
+  ws?: WebSocketEx
+  room?: number
+}
+
+export type dbType = Map<string, IDBUser>
 
 export interface IUser {
   name: string
   password: string
-}
-
-export interface IUserNameAndId {
-  name: string
-  index: number
 }
 
 export interface IRoomUser {
