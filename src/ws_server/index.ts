@@ -1,12 +1,13 @@
 import { WebSocketServer } from 'ws'
-import { IGame, IRoom, IUser, WebSocketEx, lGamesType, lRoomsType, mapNameToIdType } from './types'
-import { composeResponse, sendUpdateRoom } from './utils/utils.ts'
+import { IGame, IPosition, IRoom, IUser, WebSocketEx, lGamesType, lRoomsType, mapNameToIdType } from './types'
+import { composeResponse, getRandomNumber, sendUpdateRoom } from './utils/utils.ts'
+import { ATTACK_RESULT, FIELD_SIZE, attack, createGameField, sendTurn } from './utils/game.ts'
 
 const PORT = 3000
 
 const mapNameToId: mapNameToIdType = new Map()
-const lUsers: IUser[] = [{ name: 'dummy', password: 'dummy' }] // just want 1-based userID
-const lRooms: lRoomsType = new Map()
+export const lUsers: IUser[] = [{ name: 'dummy', password: 'dummy' }] // just want 1-based userID
+export const lRooms: lRoomsType = new Map()
 const lGames: lGamesType = new Map()
 const lWinners = []
 
@@ -33,7 +34,7 @@ wss.on('connection', (ws: WebSocketEx) => {
       if (user.room) {
         lRooms.delete(user.room)
         user.room = undefined
-        sendUpdateRoom(wss, lRooms)
+        sendUpdateRoom(wss)
       }
       // TODO user.game
     }
@@ -58,8 +59,60 @@ const handleMessage = (ws: WebSocketEx, mes: string) => {
       handleAddUserToRoom(ws, data.indexRoom)
       break
 
+    case 'add_ships':
+      handleAddShips(ws, data)
+      break
+
+    case 'attack':
+      handleAttack(ws, data)
+      break
+
+    case 'randomAttack':
+      {
+        // TODO - make it smarter!
+        data.x = getRandomNumber(FIELD_SIZE - 1)
+        data.y = getRandomNumber(FIELD_SIZE - 1)
+        handleAttack(ws, data)
+      }
+      break
+
     default:
       console.log('FTF???:', cmd) // TODO
+  }
+}
+
+function handleAttack(ws: WebSocketEx, data: any) {
+  const { x, y, gameId, indexPlayer } = data
+  const position: IPosition = { x, y }
+  const game = lGames.get(gameId)
+  if (!game) return console.log('Oops!!! Where is our game? ', data)
+
+  if (game.turn !== indexPlayer) return console.log('Wrong turn!')
+
+  const victim = game.user1 !== indexPlayer ? game.user1 : game.user2
+  const status = attack(game[victim].field, position)
+  //  if (status === ATTACK_RESULT.SHOT)
+  const res = composeResponse('attack', { position, currentPlayer: indexPlayer, status })
+  lUsers[game.user1].ws?.send(res)
+  lUsers[game.user2].ws?.send(res)
+  sendTurn(game, status === ATTACK_RESULT.MISS)
+}
+
+function handleAddShips(ws: WebSocketEx, data: any) {
+  if (!ws.userId || !data?.gameId || !data?.ships) return console.log('Oops!!! Something wrong with data: ', data)
+
+  const game = lGames.get(data.gameId)
+  if (!game) return console.log('Oops! where is our game? ', data.gameId)
+
+  game[ws.userId] = {}
+  game[ws.userId].ship = data.ships
+  game[ws.userId].field = createGameField(data.ships)
+
+  if (game[game.user1] && game[game.user2]) {
+    game.turn = Math.random() < 0.5 ? game.user1 : game.user2
+    lUsers[game.user1].ws?.send(composeResponse('start_game', { ships: game[game.user1].ships, idPlayer: game.user1 }))
+    lUsers[game.user2].ws?.send(composeResponse('start_game', { ships: game[game.user2].ships, idPlayer: game.user2 }))
+    sendTurn(game, false)
   }
 }
 
@@ -75,7 +128,7 @@ function handleCreateRoom(ws: WebSocketEx) {
   }
   lRooms.set(nextRoomId++, room)
   user.room = room.roomId
-  sendUpdateRoom(wss, lRooms)
+  sendUpdateRoom(wss)
 }
 
 function handleAddUserToRoom(ws: WebSocketEx, index: number) {
@@ -87,24 +140,24 @@ function handleAddUserToRoom(ws: WebSocketEx, index: number) {
   const room = lRooms.get(index)
   if (!room) return console.log('Oops! where is our room? ', index)
 
-  const firstUser = lUsers[room.roomUsers[0].index]
-  if (!firstUser || !firstUser.ws) return console.log('Oops! where is our firstUser.ws? ', room.roomUsers[0].index, firstUser?.ws)
+  const firstUserIndex = room.roomUsers[0].index
+  const firstUser = lUsers[firstUserIndex]
+  if (!firstUser || !firstUser.ws) return console.log('Oops! where is our firstUser.ws? ', firstUserIndex, firstUser?.ws)
 
-  const game: IGame = { gameId: nextGameId, user1: room.roomUsers[0].index, user2: ws.userId }
+  const game: IGame = { gameId: nextGameId, user1: firstUserIndex, user2: ws.userId, turn: ws.userId }
   lGames.set(nextGameId++, game)
-  const res = composeResponse('create_game', { idGame: 1, idPlayer: ws.userId })
 
-  firstUser.ws.send(res)
+  firstUser.ws.send(composeResponse('create_game', { idGame: game.gameId, idPlayer: firstUserIndex }))
   firstUser.room = undefined
 
   firstUser.game = game.gameId
   user.game = game.gameId
 
-  ws.send(res)
+  ws.send(composeResponse('create_game', { idGame: game.gameId, idPlayer: ws.userId }))
 
   lRooms.delete(room.roomId)
   if (user.room) lRooms.delete(user.room)
-  sendUpdateRoom(wss, lRooms)
+  sendUpdateRoom(wss)
 }
 
 function handleLogin(ws: WebSocketEx, name: string, password: string) {
@@ -154,6 +207,6 @@ function handleLogin(ws: WebSocketEx, name: string, password: string) {
   }
 
   ws.send(composeResponse('reg', res))
-  sendUpdateRoom(ws, lRooms)
+  sendUpdateRoom(ws)
   ws.send(composeResponse('update_winners', lWinners))
 }

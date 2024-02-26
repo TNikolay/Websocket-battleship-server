@@ -25,6 +25,27 @@ export interface IGame {
   gameId: number
   user1: number
   user2: number
+  turn: number
+}
+
+export interface IPosition {
+  x: number
+  y: number
+}
+
+export interface IShip {
+  position: IPosition
+  direction: boolean
+  length: number
+  type: 'small' | 'medium' | 'large' | 'huge'
+}
+
+// export interface IShipsData {
+//   ships: IShip[]
+// }
+
+export interface IInGameData {
+  ships: IShip[]
 }
 
 export type mapNameToIdType = Map<string, number>
