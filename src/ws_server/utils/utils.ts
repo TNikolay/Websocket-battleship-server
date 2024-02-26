@@ -1,6 +1,6 @@
 import WebSocket, { WebSocketServer } from 'ws'
-import { lRooms } from '..'
-import { WebSocketEx } from '../types'
+import { lRooms, lUsers } from '..'
+import { IWinTableEntry, WebSocketEx } from '../types'
 
 export function composeResponse(type: string, data: Object) {
   const res = JSON.stringify({
@@ -24,4 +24,13 @@ export function sendUpdateRoom(dest: WebSocketEx | WebSocketServer) {
 
 export function getRandomNumber(max: number) {
   return Math.floor(Math.random() * (max + 1))
+}
+
+export function getWinsTable() {
+  const res: IWinTableEntry[] = []
+  for (const user of lUsers) {
+    if (user.wins > 0) res.push({ name: user.name, wins: user.wins })
+  }
+
+  return res
 }

@@ -9,6 +9,7 @@ export interface IUser {
   ws?: WebSocketEx
   room?: number
   game?: number
+  wins: number
 }
 
 export interface IRoomUser {
@@ -40,12 +41,9 @@ export interface IShip {
   type: 'small' | 'medium' | 'large' | 'huge'
 }
 
-// export interface IShipsData {
-//   ships: IShip[]
-// }
-
-export interface IInGameData {
-  ships: IShip[]
+export interface IWinTableEntry {
+  name: string
+  wins: number
 }
 
 export type mapNameToIdType = Map<string, number>

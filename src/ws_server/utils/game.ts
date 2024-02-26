@@ -38,6 +38,7 @@ export function createGameField(ships: IShip[]) {
       else field[s.position.y][s.position.x + i] = CELL_STATE.SHIP
     }
   }
+
   printField(field)
   return field
 }
@@ -58,4 +59,17 @@ export function attack(field: number[][], pos: IPosition): string {
       printField(field)
       return ATTACK_RESULT.MISS
   }
+}
+
+export function isShipKilled(field: number[][], ship: IShip) {
+  console.log('isShipKilled ', ship)
+  for (let i = 0; i < ship.length; i++) {
+    let state = 0
+    if (ship.direction) state = field[ship.position.y + i][ship.position.x]
+    else state = field[ship.position.y][ship.position.x + i]
+    console.log('isShipKilled ', state)
+    if (state === CELL_STATE.SHIP) return false
+  }
+
+  return true
 }

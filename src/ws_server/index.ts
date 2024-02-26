@@ -1,15 +1,14 @@
 import { WebSocketServer } from 'ws'
 import { IGame, IPosition, IRoom, IUser, WebSocketEx, lGamesType, lRoomsType, mapNameToIdType } from './types'
-import { composeResponse, getRandomNumber, sendUpdateRoom } from './utils/utils.ts'
-import { ATTACK_RESULT, FIELD_SIZE, attack, createGameField, sendTurn } from './utils/game.ts'
+import { ATTACK_RESULT, FIELD_SIZE, attack, createGameField, isShipKilled, sendTurn } from './utils/game.ts'
+import { composeResponse, getRandomNumber, getWinsTable, sendUpdateRoom } from './utils/utils.ts'
 
 const PORT = 3000
 
 const mapNameToId: mapNameToIdType = new Map()
-export const lUsers: IUser[] = [{ name: 'dummy', password: 'dummy' }] // just want 1-based userID
+export const lUsers: IUser[] = [{ name: 'dummy', password: 'dummy', wins: 0 }] // just want 1-based userID
 export const lRooms: lRoomsType = new Map()
 const lGames: lGamesType = new Map()
-const lWinners = []
 
 // don't forget to fix problem with overflow after reaching first millions of player!
 let nextRoomId = 1
@@ -36,7 +35,18 @@ wss.on('connection', (ws: WebSocketEx) => {
         user.room = undefined
         sendUpdateRoom(wss)
       }
-      // TODO user.game
+      if (user.game) {
+        const game = lGames.get(user.game)
+        if (!game) return console.log('Oops!!! Where is our game? ', data)
+
+        const winner = game.user1 !== ws.userId ? game.user1 : game.user2
+
+        lUsers[winner].wins++
+        lUsers[winner].ws?.send(composeResponse('finish', { winPlayer: winner }))
+        lUsers[winner].ws?.send(composeResponse('update_winners', getWinsTable()))
+        lRooms.delete(user.game)
+        user.game = undefined
+      }
     }
   })
 })
@@ -77,7 +87,7 @@ const handleMessage = (ws: WebSocketEx, mes: string) => {
       break
 
     default:
-      console.log('FTF???:', cmd) // TODO
+      console.log('FTF???:', cmd)
   }
 }
 
@@ -90,8 +100,32 @@ function handleAttack(ws: WebSocketEx, data: any) {
   if (game.turn !== indexPlayer) return console.log('Wrong turn!')
 
   const victim = game.user1 !== indexPlayer ? game.user1 : game.user2
-  const status = attack(game[victim].field, position)
-  //  if (status === ATTACK_RESULT.SHOT)
+  let status = attack(game[victim].field, position)
+
+  if (status === ATTACK_RESULT.SHOT) {
+    for (let i = 0; i < game[victim].ship.length; i++) {
+      const ship = game[victim].ship[i]
+      if (isShipKilled(game[victim].field, ship)) {
+        if (game[victim].ship.length === 1) {
+          let res = composeResponse('finish', { winPlayer: indexPlayer })
+          lUsers[game.user1].ws?.send(res)
+          lUsers[game.user2].ws?.send(res)
+
+          lUsers[indexPlayer].wins++
+          const winners = getWinsTable()
+          res = composeResponse('update_winners', winners)
+          lUsers[game.user1].ws?.send(res)
+          lUsers[game.user2].ws?.send(res)
+
+          return
+        }
+        game[victim].ship.splice(i, 1)
+        status = ATTACK_RESULT.KILLED
+        break
+      }
+    }
+  }
+
   const res = composeResponse('attack', { position, currentPlayer: indexPlayer, status })
   lUsers[game.user1].ws?.send(res)
   lUsers[game.user2].ws?.send(res)
@@ -190,7 +224,7 @@ function handleLogin(ws: WebSocketEx, name: string, password: string) {
   } else {
     // create a new user in db
     userId = lUsers.length
-    user = { name, password }
+    user = { name, password, wins: 0 }
     lUsers[userId] = user
     mapNameToId.set(name, userId)
   }
@@ -208,5 +242,5 @@ function handleLogin(ws: WebSocketEx, name: string, password: string) {
 
   ws.send(composeResponse('reg', res))
   sendUpdateRoom(ws)
-  ws.send(composeResponse('update_winners', lWinners))
+  ws.send(composeResponse('update_winners', getWinsTable()))
 }
